@@ -1,0 +1,311 @@
+\<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ChatSphere - Discord Clone</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="script.js"></script>
+</head>
+<body>
+
+  <!-- Authentication Section -->
+  <div id="auth" class="auth-section">
+    <h2>Login</h2>
+    <input type="email" id="email" placeholder="Email" />
+    <input type="password" id="password" placeholder="Password" />
+    <button onclick="signIn()">Login</button>
+    <button onclick="signUp()">Sign Up</button>
+  </div>
+
+  <!-- Profile Section (Visible after login) -->
+  <div id="profile" class="profile-section hidden">
+    <h2>Welcome, <span id="username"></span></h2>
+    <button onclick="logout()">Logout</button>
+  </div>
+
+  <!-- Main Chat & Server Interface -->
+  <div id="servers" class="servers-section hidden">
+    <h2>Your Servers</h2>
+    <button onclick="createServer()">Create Server</button>
+    <div id="serverList"></div>
+  </div>
+
+  <!-- Channel Section -->
+  <div id="channelSection" class="channel-section hidden">
+    <h2 id="channelName">Channel</h2>
+    <div id="messageList"></div>
+    <textarea id="messageInput" placeholder="Type a message..."></textarea>
+    <button onclick="sendMessage()">Send</button>
+    <button onclick="createChannel()">Create Channel</button>
+  </div>
+
+  <!-- Voice Channel Section -->
+  <div id="voiceChannelSection" class="voice-channel-section hidden">
+    <h2>Voice Channel</h2>
+    <button onclick="startVoiceChat()">Start Voice Chat</button>
+    <button onclick="endVoiceChat()">End Voice Chat</button>
+  </div>
+
+  <!-- Direct Messages Section -->
+  <div id="dmSection" class="dm-section hidden">
+    <h2>Direct Messages</h2>
+    <div id="dmList"></div>
+    <textarea id="dmMessage" placeholder="Send a direct message..."></textarea>
+    <button onclick="sendDM()">Send</button>
+  </div>
+
+  <!-- Server Settings Section -->
+  <div id="serverSettings" class="server-settings-section hidden">
+    <h3>Server Settings</h3>
+    <button onclick="editServer()">Edit Server</button>
+    <button onclick="deleteServer()">Delete Server</button>
+  </div>
+
+  <!-- Modals for Creating Server and Channel -->
+  <div id="createServerModal" class="modal hidden">
+    <h3>Create Server</h3>
+    <input type="text" id="serverName" placeholder="Server Name" />
+    <button onclick="createServerFromModal()">Create</button>
+    <button onclick="closeModal()">Cancel</button>
+  </div>
+
+  <div id="createChannelModal" class="modal hidden">
+    <h3>Create Channel</h3>
+    <input type="text" id="channelName" placeholder="Channel Name" />
+    <textarea id="channelDescription" placeholder="Channel Description"></textarea>
+    <button onclick="createChannelForServer()">Create</button>
+    <button onclick="closeModal()">Cancel</button>
+  </div>
+
+  <!-- Firebase Script -->
+  <script type="module">
+    import { initializeApp } from 'firebase/app';
+    import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
+    import { getDatabase, ref, set, get, child, update, remove, onValue, push } from 'firebase/database';
+    import { getAnalytics } from 'firebase/analytics';
+
+    // Firebase Configuration
+    const firebaseConfig = {
+      apiKey: 'AIzaSyD6u35x1_jDflBTSM6WKnba1TEKspH4oUA',
+      authDomain: 'chatsphere-62024.firebaseapp.com',
+      databaseURL: 'https://chatsphere-62024-default-rtdb.firebaseio.com',
+      projectId: 'chatsphere-62024',
+      storageBucket: 'chatsphere-62024.firebasestorage.app',
+      messagingSenderId: '422144020211',
+      appId: '1:422144020211:web:8b74624329498ef2d0f186',
+      measurementId: 'G-4QSPL23K26',
+    };
+
+    // Initialize Firebase
+    const app = initializeApp(firebaseConfig);
+    const analytics = getAnalytics(app);
+    const auth = getAuth();
+    const db = getDatabase();
+
+    let currentUser = null;
+    let currentServerId = null;
+    let currentChannelId = null;
+
+    // Authentication Functions
+    function signIn() {
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+
+      signInWithEmailAndPassword(auth, email, password)
+        .then(userCredential => {
+          currentUser = userCredential.user;
+          loadProfile();
+          loadServers();
+        })
+        .catch(error => alert('Login failed: ' + error.message));
+    }
+
+    function signUp() {
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+
+      createUserWithEmailAndPassword(auth, email, password)
+        .then(userCredential => {
+          currentUser = userCredential.user;
+          loadProfile();
+          loadServers();
+        })
+        .catch(error => alert('Sign Up failed: ' + error.message));
+    }
+
+    function logout() {
+      signOut(auth).then(() => {
+        currentUser = null;
+        document.getElementById('auth').classList.remove('hidden');
+        document.getElementById('profile').classList.add('hidden');
+        document.getElementById('servers').classList.add('hidden');
+        document.getElementById('dmSection').classList.add('hidden');
+        document.getElementById('voiceChannelSection').classList.add('hidden');
+      });
+    }
+
+    // Auth state change listener
+    onAuthStateChanged(auth, user => {
+      if (user) {
+        currentUser = user;
+        loadProfile();
+        loadServers();
+      } else {
+        document.getElementById('auth').classList.remove('hidden');
+        document.getElementById('profile').classList.add('hidden');
+        document.getElementById('servers').classList.add('hidden');
+        document.getElementById('dmSection').classList.add('hidden');
+        document.getElementById('voiceChannelSection').classList.add('hidden');
+      }
+    });
+
+    // Profile functions
+    function loadProfile() {
+      document.getElementById('username').innerText = currentUser.email;
+      document.getElementById('auth').classList.add('hidden');
+      document.getElementById('profile').classList.remove('hidden');
+      document.getElementById('servers').classList.remove('hidden');
+    }
+
+    // Server Management Functions
+    function loadServers() {
+      const serverList = document.getElementById('serverList');
+      serverList.innerHTML = '';
+
+      const serversRef = ref(db, 'servers');
+      onValue(serversRef, snapshot => {
+        snapshot.forEach(childSnapshot => {
+          const server = childSnapshot.val();
+          const serverElement = document.createElement('div');
+          serverElement.innerText = server.name;
+          serverElement.onclick = () => loadServerChannels(childSnapshot.key);
+          serverList.appendChild(serverElement);
+        });
+      });
+    }
+
+    function createServer() {
+      document.getElementById('createServerModal').classList.remove('hidden');
+    }
+
+    function createServerFromModal() {
+      const serverName = document.getElementById('serverName').value;
+      if (serverName.trim() !== '') {
+        const newServerRef = ref(db, 'servers').push();
+        const serverId = newServerRef.key;
+        set(newServerRef, {
+          name: serverName,
+          owner: currentUser.uid,
+        });
+        loadServers();
+        document.getElementById('createServerModal').classList.add('hidden');
+      } else {
+        alert('Server name cannot be empty.');
+      }
+    }
+
+    function closeModal() {
+      document.getElementById('createServerModal').classList.add('hidden');
+      document.getElementById('createChannelModal').classList.add('hidden');
+    }
+
+    function loadServerChannels(serverId) {
+      currentServerId = serverId;
+      const channelSection = document.getElementById('channelSection');
+      channelSection.classList.remove('hidden');
+      document.getElementById('channelName').innerText = 'Server: ' + serverId;
+
+      const channelsRef = ref(db, 'servers/' + serverId + '/channels');
+      onValue(channelsRef, snapshot => {
+        const messageList = document.getElementById('messageList');
+        messageList.innerHTML = '';
+        snapshot.forEach(childSnapshot => {
+          const channel = childSnapshot.val();
+          const channelElement = document.createElement('div');
+          channelElement.innerText = channel.name;
+          channelElement.onclick = () => loadMessages(serverId, childSnapshot.key);
+          messageList.appendChild(channelElement);
+        });
+      });
+    }
+
+    function loadMessages(serverId, channelId) {
+      currentChannelId = channelId;
+      const messagesRef = ref(db, 'servers/' + serverId + '/channels/' + channelId + '/messages');
+      onValue(messagesRef, snapshot => {
+        const messageList = document.getElementById('messageList');
+        messageList.innerHTML = '';
+        snapshot.forEach(childSnapshot => {
+          const message = childSnapshot.val();
+          const messageElement = document.createElement('div');
+          messageElement.innerText = message.text;
+          messageList.appendChild(messageElement);
+        });
+      });
+    }
+
+    function sendMessage() {
+      const messageText = document.getElementById('messageInput').value;
+      if (messageText.trim() !== '') {
+        const messagesRef = ref(db, 'servers/' + currentServerId + '/channels/' + currentChannelId + '/messages').push();
+        set(messagesRef, {
+          text: messageText,
+          userId: currentUser.uid,
+          timestamp: Date.now(),
+        });
+        document.getElementById('messageInput').value = '';
+      }
+    }
+
+    // Direct Messages Functions
+    function loadDirectMessages() {
+      const dmList = document.getElementById('dmList');
+      dmList.innerHTML = '';
+
+      const dmsRef = ref(db, 'directMessages/' + currentUser.uid);
+      onValue(dmsRef, snapshot => {
+        snapshot.forEach(childSnapshot => {
+          const dm = childSnapshot.val();
+          const dmElement = document.createElement('div');
+          dmElement.innerText = dm.message;
+          dmElement.onclick = () => loadDMMessages(childSnapshot.key);
+          dmList.appendChild(dmElement);
+        });
+      });
+    }
+
+    function sendDM() {
+      const dmMessage = document.getElementById('dmMessage').value;
+      if (dmMessage.trim() !== '') {
+        const dmRef = ref(db, 'directMessages/' + currentUser.uid).push();
+        set(dmRef, {
+          message: dmMessage,
+          timestamp: Date.now(),
+        });
+        loadDirectMessages();
+        document.getElementById('dmMessage').value = '';
+      }
+    }
+
+    // Server Editing Functions
+    function editServer() {
+      alert('Edit Server functionality not implemented yet');
+    }
+
+    function deleteServer() {
+      alert('Delete Server functionality not implemented yet');
+    }
+
+    // Voice Channel Functions
+    function startVoiceChat() {
+      document.getElementById('voiceChannelSection').classList.remove('hidden');
+    }
+
+    function endVoiceChat() {
+      document.getElementById('voiceChannelSection').classList.add('hidden');
+    }
+  </script>
+</body>
+</html>
+
